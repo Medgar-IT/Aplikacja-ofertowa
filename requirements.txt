@@ -1,0 +1,7 @@
+streamlit
+supabase
+pandas
+jinja2
+xhtml2pdf
+requests
+Pillow
