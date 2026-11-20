@@ -3,6 +3,7 @@ import io
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,6 +20,8 @@ from xhtml2pdf import pisa
 # ============================================================================
 STORAGE_BUCKET = "product-images"
 LOGO_URL = "https://jjkcdlsniwytkyregzrf.supabase.co/storage/v1/object/public/product-images/obraz_2026-11-06_182711852.png"
+BRAND_COLOR = "#54B6A6"
+UNIT_OPTIONS = ["szt", "kg", "m"]
 
 BASE_DIR = Path(__file__).resolve().parent
 FONT_REGULAR_PATH = BASE_DIR / "DejaVuSans.ttf"
@@ -41,6 +44,40 @@ st.set_page_config(
     page_icon="📄",
     layout="wide",
 )
+
+
+def apply_custom_theme() -> None:
+    """Wstrzykuje niestandardowy styl CSS zmieniający kolor głównych przycisków i akcentów na firmowy turkus (#54B6A6)."""
+    st.markdown(
+        f"""
+        <style>
+            .stButton > button[kind="primary"],
+            .stDownloadButton > button[kind="primary"],
+            .stFormSubmitButton > button[kind="primary"],
+            div[data-testid="stFormSubmitButton"] > button {{
+                background-color: {BRAND_COLOR} !important;
+                border-color: {BRAND_COLOR} !important;
+                color: #ffffff !important;
+            }}
+            .stButton > button[kind="primary"]:hover,
+            .stDownloadButton > button[kind="primary"]:hover,
+            .stFormSubmitButton > button[kind="primary"]:hover,
+            div[data-testid="stFormSubmitButton"] > button:hover {{
+                background-color: #439b8c !important;
+                border-color: #439b8c !important;
+                color: #ffffff !important;
+            }}
+            .stButton > button[kind="primary"]:focus,
+            .stButton > button[kind="primary"]:active {{
+                background-color: {BRAND_COLOR} !important;
+                border-color: {BRAND_COLOR} !important;
+                color: #ffffff !important;
+                box-shadow: 0 0 0 0.2rem rgba(84, 182, 166, 0.35) !important;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # 2. Inicjalizacja połączenia z bazą danych Supabase
@@ -69,7 +106,7 @@ def check_authentication() -> bool:
 
     with st.form("login_form"):
         password = st.text_input("Hasło", type="password")
-        submit = st.form_submit_button("Zaloguj się")
+        submit = st.form_submit_button("Zaloguj się", type="primary")
 
         if submit:
             if password == st.secrets.get("GLOBAL_PASSWORD"):
@@ -81,13 +118,14 @@ def check_authentication() -> bool:
     return False
 
 
-# 4. Inicjalizacja stanu sesji dla Kreatora Oferty oraz powiadomień
+# 4. Inicjalizacja stanu sesji dla Kreatora Oferty oraz funkcje pomocnicze
 def create_empty_offer_item(default_product_id: Optional[str] = None) -> Dict[str, Any]:
     """Tworzy nowy, domyślny wiersz pozycji w kreatorze oferty."""
     return {
         "row_id": str(uuid.uuid4()),
         "product_id": default_product_id,
         "quantity": 1,
+        "unit": "szt",
         "unit_price": 0.0,
         "custom_notes": "",
     }
@@ -132,6 +170,20 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "Klient"
 
 
+def generate_offer_number() -> str:
+    """Generuje unikalny numer oferty w formacie OFE/ROK/MIESIĄC/ID (np. OFE/2026/11/A1B2)."""
+    now = datetime.now()
+    short_uid = uuid.uuid4().hex[:4].upper()
+    return f"OFE/{now.strftime('%Y/%m')}/{short_uid}"
+
+
+def format_product_label_with_code(product: Dict[str, Any]) -> str:
+    """Zwraca nazwę produktu wraz z jego kodem (do wyświetlenia w Kreatorze i na listach)."""
+    code = (product.get("product_code") or "").strip()
+    name = product.get("name", "Produkt")
+    return f"[{code}] {name}" if code else name
+
+
 # 5. Konwersja obrazów z URL do Base64, obsługa czcionek i generator PDF (Jinja2 + xhtml2pdf)
 def url_to_base64(url: Optional[str]) -> str:
     """
@@ -152,7 +204,6 @@ def url_to_base64(url: Optional[str]) -> str:
         if not response.content:
             return ""
 
-        # Rozpoznanie typu MIME z nagłówka Content-Type lub rozszerzenia pliku w URL
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if not content_type.startswith("image/"):
             ext = os.path.splitext(clean_url.split("?")[0])[1].lower()
@@ -212,15 +263,19 @@ def generate_pdf(
     client_data: Dict[str, Any],
     items_data: List[Dict[str, Any]],
     total_net: float,
+    offer_number: Optional[str] = None,
+    offer_date: Optional[str] = None,
 ) -> bytes:
     """
     Generuje dokument PDF z ofertą na podstawie szablonu HTML (Jinja2) oraz biblioteki xhtml2pdf.
-    Obsługuje polskie znaki (DejaVuSans.ttf), obrazy w Base64 oraz układ tabeli zgodny ze wzorem klienta.
+    Uwzględnia numer oferty, datę, dwukolumnowy układ Sprzedający/Kupujący oraz jednostki miary.
+    Na PDF celowo pomijany jest kod produktu (widoczna jest wyłącznie nazwa i opis).
     """
     ensure_polish_fonts()
 
-    # Konwersja logo firmy do Base64 przed wygenerowaniem HTML
     logo_base64 = url_to_base64(LOGO_URL)
+    final_offer_number = offer_number or generate_offer_number()
+    final_offer_date = offer_date or datetime.now().strftime("%d.%m.%Y")
 
     html_template = """
     <!DOCTYPE html>
@@ -250,23 +305,53 @@ def generate_pdf(
                 color: #000000;
                 line-height: 1.35;
             }
-            .header-logo {
-                margin-bottom: 15px;
-                text-align: left;
+            table.top-header-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 12px;
+            }
+            table.top-header-table td {
+                border: none;
+                padding: 0;
+                vertical-align: top;
             }
             .logo-fallback {
                 font-size: 22pt;
                 font-weight: bold;
                 letter-spacing: 1px;
                 color: #1a1a1a;
-                margin-bottom: 15px;
             }
-            .client-block {
-                margin-bottom: 18px;
-                text-align: left;
+            .offer-meta {
+                text-align: right;
                 font-size: 10.5pt;
             }
-            .client-line {
+            .offer-number-badge {
+                font-size: 13pt;
+                font-weight: bold;
+                color: #000000;
+                margin-bottom: 4px;
+            }
+            table.parties-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 18px;
+            }
+            table.parties-table td {
+                width: 50%;
+                border: 1px solid #d9d9d9;
+                background-color: #fafafa;
+                padding: 10px 12px;
+                vertical-align: top;
+                font-size: 10pt;
+            }
+            .party-heading {
+                font-size: 9.5pt;
+                font-weight: bold;
+                color: #54B6A6;
+                margin-bottom: 4px;
+                letter-spacing: 0.5px;
+            }
+            .party-line {
                 margin: 2px 0;
             }
             table.offer-table {
@@ -330,27 +415,46 @@ def generate_pdf(
         </style>
     </head>
     <body>
-        <!-- Nagłówek z logo po lewej stronie -->
-        <div class="header-logo">
-            {% if logo_base64 %}
-                <img src="{{ logo_base64 }}" style="width: 220px; height: auto; margin-bottom: 15px;" alt="Logo" />
-            {% else %}
-                <div class="logo-fallback">proles CONCEPT</div>
-            {% endif %}
-        </div>
+        <!-- Górny pasek: Logo po lewej, Numer oferty i Data po prawej -->
+        <table class="top-header-table">
+            <tr>
+                <td style="width: 55%; text-align: left;">
+                    {% if logo_base64 %}
+                        <img src="{{ logo_base64 }}" style="width: 220px; height: auto;" alt="Logo" />
+                    {% else %}
+                        <div class="logo-fallback">proles CONCEPT</div>
+                    {% endif %}
+                </td>
+                <td class="offer-meta" style="width: 45%;">
+                    <div class="offer-number-badge">OFERTA: {{ offer_number }}</div>
+                    <div>Data: {{ offer_date }}</div>
+                </td>
+            </tr>
+        </table>
 
-        <!-- Dane klienta w osobnych liniach pod logo -->
-        <div class="client-block">
-            <div class="client-line"><strong>{{ client.name }}</strong></div>
-            {% if client.nip %}
-                <div class="client-line">NIP {{ client.nip }}</div>
-            {% endif %}
-            {% if client.address %}
-                <div class="client-line">{{ client.address }}</div>
-            {% endif %}
-        </div>
+        <!-- Dwie kolumny: SPRZEDAJĄCY (lewa) oraz KUPUJĄCY (prawa) -->
+        <table class="parties-table">
+            <tr>
+                <td>
+                    <div class="party-heading">SPRZEDAJĄCY:</div>
+                    <div class="party-line"><strong>Magdalena Domagalska</strong></div>
+                    <div class="party-line">ul. Kolejowa 3, 32-086 Dziekanowice</div>
+                    <div class="party-line">NIP: 944 106 45 83</div>
+                </td>
+                <td>
+                    <div class="party-heading">KUPUJĄCY:</div>
+                    <div class="party-line"><strong>{{ client.name }}</strong></div>
+                    {% if client.nip %}
+                        <div class="party-line">NIP: {{ client.nip }}</div>
+                    {% endif %}
+                    {% if client.address %}
+                        <div class="party-line">{{ client.address }}</div>
+                    {% endif %}
+                </td>
+            </tr>
+        </table>
 
-        <!-- Tabela z pozycjami oferty -->
+        <!-- Tabela z pozycjami oferty (bez kodu produktu) -->
         <table class="offer-table">
             <thead>
                 <tr>
@@ -364,7 +468,7 @@ def generate_pdf(
             <tbody>
                 {% for item in items %}
                 <tr>
-                    <!-- Kolumna 1 (30%): Numer i nazwa produktu (pogrubione) + wyśrodkowane zdjęcie pod spodem -->
+                    <!-- Kolumna 1 (30%): Numer i sama nazwa produktu (bez kodu produktu!) + zdjęcie pod spodem -->
                     <td class="col-product">
                         <strong>{{ loop.index }}. {{ item.name }}</strong>
                         {% if item.image_base64 %}
@@ -380,9 +484,9 @@ def generate_pdf(
                         {% endif %}
                     </td>
 
-                    <!-- Kolumna 3 (12%): Ilość z dopiskiem szt -->
+                    <!-- Kolumna 3 (12%): Ilość z wybraną jednostką miary (szt / kg / m) -->
                     <td class="col-qty">
-                        {{ item.quantity_str }} szt
+                        {{ item.quantity_str }} {{ item.unit }}
                     </td>
 
                     <!-- Kolumna 4 (11%): Cena jednostkowa netto z przecinkiem -->
@@ -409,10 +513,11 @@ def generate_pdf(
     </html>
     """
 
-    # Przygotowanie danych pozycji (w tym konwersja image_url do Base64)
+    # Przygotowanie danych pozycji (pomijamy product_code, przekazujemy tylko czystą nazwę i opis)
     prepared_items = []
     for item in items_data:
         qty = int(round(float(item.get("quantity", 1))))
+        unit = (item.get("unit") or "szt").strip()
         unit_price = float(item.get("unit_price", 0.0))
         row_total = float(item.get("total_price", qty * unit_price))
         raw_desc = item.get("description") or ""
@@ -428,6 +533,7 @@ def generate_pdf(
                 "custom_notes": raw_notes.strip(),
                 "custom_notes_html": "<br/>".join(raw_notes.splitlines()),
                 "quantity_str": str(qty),
+                "unit": unit,
                 "unit_price_str": format_pl_currency(unit_price),
                 "total_price_str": format_pl_currency(row_total),
             }
@@ -436,6 +542,8 @@ def generate_pdf(
     template = Template(html_template)
     rendered_html = template.render(
         logo_base64=logo_base64,
+        offer_number=final_offer_number,
+        offer_date=final_offer_date,
         client={
             "name": client_data.get("name", ""),
             "nip": client_data.get("nip") or "",
@@ -473,7 +581,6 @@ def compress_image(
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
 
-    # Obsługa przezroczystości (PNG / WebP) - nałożenie na białe tło przed konwersją do JPEG
     if img.mode in ("RGBA", "P", "LA"):
         rgba_img = img.convert("RGBA")
         background = Image.new("RGB", rgba_img.size, (255, 255, 255))
@@ -483,10 +590,8 @@ def compress_image(
     elif img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Zmniejszenie rozdzielczości z zachowaniem proporcji
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
 
-    # Zapis do bufora w pamięci jako zoptymalizowany plik JPEG
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG", quality=quality, optimize=True)
     return buffer.getvalue()
@@ -511,13 +616,95 @@ def upload_product_image(supabase: Client, uploaded_file: Any) -> str:
     return public_url
 
 
-# 7. Widok zakładki "📄 Kreator Oferty" (tab1)
+# 7. Wspólna funkcja zapisu oferty do bazy (używana przy wersji roboczej i przy generowaniu PDF)
+def save_offer_to_database(
+    supabase: Client,
+    current_client: Dict[str, Any],
+    offer_items_state: List[Dict[str, Any]],
+    products_by_id: Dict[str, Dict[str, Any]],
+    total_net_value: float,
+) -> Tuple[str, str, List[Dict[str, Any]]]:
+    """
+    Zapisuje ofertę w tabeli `offers` (wraz z wygenerowanym `offer_number`)
+    oraz pozycje w tabeli `offer_items` (wraz z `unit` i `custom_notes`).
+    Zwraca krotkę: (offer_id, offer_number, items_pdf_payload).
+    """
+    offer_number = generate_offer_number()
+
+    offer_insert = (
+        supabase.table("offers")
+        .insert(
+            {
+                "client_id": current_client["id"],
+                "total_net_value": round(total_net_value, 2),
+                "offer_number": offer_number,
+            }
+        )
+        .execute()
+    )
+    if not offer_insert.data:
+        raise RuntimeError("Nie udało się uzyskać ID nowo utworzonej oferty.")
+
+    offer_id = offer_insert.data[0]["id"]
+
+    items_db_payload = []
+    items_pdf_payload = []
+
+    for item in offer_items_state:
+        prod = products_by_id[item["product_id"]]
+        qty = int(item["quantity"])
+        unit = item.get("unit") if item.get("unit") in UNIT_OPTIONS else "szt"
+        u_price = round(float(item["unit_price"]), 2)
+        t_price = round(qty * u_price, 2)
+        notes = (item.get("custom_notes") or "").strip()
+
+        items_db_payload.append(
+            {
+                "offer_id": offer_id,
+                "product_id": prod["id"],
+                "quantity": qty,
+                "unit": unit,
+                "unit_price": u_price,
+                "total_price": t_price,
+                "custom_notes": notes if notes else None,
+            }
+        )
+
+        # Do PDF przekazujemy wyłącznie czystą nazwę produktu (bez product_code!)
+        items_pdf_payload.append(
+            {
+                "name": prod["name"],
+                "description": prod.get("description") or "",
+                "image_url": prod.get("image_url") or "",
+                "quantity": qty,
+                "unit": unit,
+                "unit_price": u_price,
+                "total_price": t_price,
+                "custom_notes": notes,
+            }
+        )
+
+    try:
+        supabase.table("offer_items").insert(items_db_payload).execute()
+    except Exception as db_err:
+        if "custom_notes" in str(db_err):
+            fallback_payload = [
+                {k: v for k, v in row.items() if k != "custom_notes"}
+                for row in items_db_payload
+            ]
+            supabase.table("offer_items").insert(fallback_payload).execute()
+        else:
+            raise db_err
+
+    return offer_id, offer_number, items_pdf_payload
+
+
+# 8. Widok zakładki "📄 Kreator Oferty" (tab1)
 def render_creator_tab(supabase: Client) -> None:
-    """Renderuje kreator oferty z dynamiczną listą pozycji, zapisem do bazy i eksportem do PDF."""
+    """Renderuje kreator oferty z dynamiczną listą pozycji, wyborem jednostek, zapisem wersji roboczej i eksportem do PDF."""
     st.header("📄 Kreator Oferty")
     init_creator_state()
 
-    # Pobranie klientów i produktów z bazy
     try:
         clients_resp = supabase.table("clients").select("*").order("name").execute()
         clients_data = clients_resp.data or []
@@ -541,7 +728,6 @@ def render_creator_tab(supabase: Client) -> None:
     client_ids = list(clients_by_id.keys())
     product_ids = list(products_by_id.keys())
 
-    # Synchronizacja wybranego klienta ze stanem sesji
     if st.session_state.selected_client_id not in clients_by_id:
         st.session_state.selected_client_id = client_ids[0]
 
@@ -557,7 +743,6 @@ def render_creator_tab(supabase: Client) -> None:
     st.session_state.selected_client_id = chosen_client_id
     current_client = clients_by_id[chosen_client_id]
 
-    # Wyświetlenie pełnych danych wybranego klienta pod selectboxem
     with st.container(border=True):
         st.markdown(f"**Nazwa firmy:** {current_client['name']}")
         st.markdown(f"**NIP:** {current_client.get('nip') or '—'}")
@@ -566,10 +751,11 @@ def render_creator_tab(supabase: Client) -> None:
     st.divider()
     st.subheader("2. Pozycje w ofercie")
 
-    # Nagłówki kolumn dla czytelności
-    hdr1, hdr2, hdr3, hdr4, hdr5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.7])
-    hdr1.markdown("**Zdjęcie i Produkt**")
-    hdr2.markdown("**Ilość (szt)**")
+    # Nagłówki kolumn (dodana kolumna Jednostka obok Ilości)
+    hdr1, hdr2, hdr_unit, hdr3, hdr4, hdr5 = st.columns([3.3, 1.0, 0.9, 1.4, 1.4, 0.6])
+    hdr1.markdown("**Zdjęcie i Produkt (Kod + Nazwa)**")
+    hdr2.markdown("**Ilość**")
+    hdr_unit.markdown("**Jedn.**")
     hdr3.markdown("**Cena jedn. netto (zł)**")
     hdr4.markdown("**Suma netto (zł)**")
     hdr5.markdown("**Usuń**")
@@ -585,17 +771,20 @@ def render_creator_tab(supabase: Client) -> None:
         if item.get("product_id") not in products_by_id:
             item["product_id"] = product_ids[0]
 
-        with st.container(border=True):
-            col1, col2, col3, col4, col5 = st.columns([3.5, 1.2, 1.5, 1.5, 0.7])
+        if item.get("unit") not in UNIT_OPTIONS:
+            item["unit"] = "szt"
 
-            # Kolumna 1: Wybór produktu, miniaturka zdjęcia, opis z bazy i dodatkowy opis pozycji
+        with st.container(border=True):
+            col1, col2, col_unit, col3, col4, col5 = st.columns([3.3, 1.0, 0.9, 1.4, 1.4, 0.6])
+
+            # Kolumna 1: Wybór produktu (z kodem produktu), miniaturka, opis z bazy i dodatkowy opis
             with col1:
                 prod_idx = product_ids.index(item["product_id"])
                 selected_prod_id = st.selectbox(
                     f"Produkt (pozycja #{idx + 1})",
                     options=product_ids,
                     index=prod_idx,
-                    format_func=lambda pid: products_by_id[pid]["name"],
+                    format_func=lambda pid: format_product_label_with_code(products_by_id[pid]),
                     key=f"prod_select_{row_key}",
                 )
                 item["product_id"] = selected_prod_id
@@ -608,6 +797,8 @@ def render_creator_tab(supabase: Client) -> None:
                     else:
                         st.caption("Brak zdjęcia")
                 with sub_desc:
+                    if prod_info.get("product_code"):
+                        st.caption(f"**Kod produktu:** `{prod_info['product_code']}`")
                     st.caption(prod_info.get("description") or "Brak domyślnego opisu w bazie.")
 
                 custom_notes = st.text_input(
@@ -629,6 +820,18 @@ def render_creator_tab(supabase: Client) -> None:
                     label_visibility="collapsed",
                 )
                 item["quantity"] = int(qty)
+
+            # Kolumna 2b: Jednostka miary (szt / kg / m)
+            with col_unit:
+                unit_idx = UNIT_OPTIONS.index(item["unit"])
+                selected_unit = st.selectbox(
+                    "Jednostka",
+                    options=UNIT_OPTIONS,
+                    index=unit_idx,
+                    key=f"unit_{row_key}",
+                    label_visibility="collapsed",
+                )
+                item["unit"] = selected_unit
 
             # Kolumna 3: Cena jednostkowa netto
             with col3:
@@ -654,7 +857,6 @@ def render_creator_tab(supabase: Client) -> None:
                 if st.button("🗑️", key=f"del_{row_key}", help="Usuń tę pozycję"):
                     row_to_remove = idx
 
-    # Obsługa usunięcia wiersza
     if row_to_remove is not None:
         if len(st.session_state.offer_items) > 1:
             st.session_state.offer_items.pop(row_to_remove)
@@ -677,99 +879,94 @@ def render_creator_tab(supabase: Client) -> None:
 
     st.divider()
 
-    # Podsumowanie na dole po prawej stronie
-    _, sum_col = st.columns([3, 1.5])
-    with sum_col:
+    # Podsumowanie pozycji (z widocznym kodem produktu w podsumowaniu kreatora) i łączna kwota netto
+    sum_left, sum_right = st.columns([2.5, 1.5])
+    with sum_left:
+        with st.expander("📋 Podgląd podsumowania pozycji (z kodami produktów)", expanded=False):
+            summary_rows = []
+            for idx, it in enumerate(st.session_state.offer_items, start=1):
+                p_obj = products_by_id[it["product_id"]]
+                q_val = int(it["quantity"])
+                u_val = float(it["unit_price"])
+                summary_rows.append(
+                    {
+                        "Lp.": idx,
+                        "Kod i Nazwa": format_product_label_with_code(p_obj),
+                        "Ilość": f"{q_val} {it.get('unit', 'szt')}",
+                        "Cena netto": f"{format_pl_currency(u_val)} zł",
+                        "Wartość netto": f"{format_pl_currency(q_val * u_val)} zł",
+                    }
+                )
+            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    with sum_right:
         st.markdown(
             f"<h2 style='text-align: right;'>RAZEM NETTO: {format_pl_currency(total_net_value)} zł</h2>",
             unsafe_allow_html=True,
         )
 
-    # Przycisk zapisu oferty w bazie i generowania pliku PDF
-    if st.button(
-        "💾 Zapisz ofertę w historii i wygeneruj PDF",
-        type="primary",
-        use_container_width=True,
-    ):
-        try:
-            with st.spinner("Zapisywanie oferty w bazie Supabase i generowanie pliku PDF..."):
-                # 1. Zapis rekordu w tabeli offers
-                offer_insert = (
-                    supabase.table("offers")
-                    .insert(
-                        {
-                            "client_id": current_client["id"],
-                            "total_net_value": round(total_net_value, 2),
-                        }
+    # Dwa przyciski zapisu: Wersja robocza oraz Zapis + Generowanie PDF
+    save_col_draft, save_col_pdf = st.columns(2)
+
+    with save_col_draft:
+        if st.button(
+            "💾 Zapisz ofertę jako wersję roboczą",
+            use_container_width=True,
+        ):
+            try:
+                with st.spinner("Zapisywanie wersji roboczej w bazie Supabase..."):
+                    _, offer_number, _ = save_offer_to_database(
+                        supabase=supabase,
+                        current_client=current_client,
+                        offer_items_state=st.session_state.offer_items,
+                        products_by_id=products_by_id,
+                        total_net_value=total_net_value,
                     )
-                    .execute()
-                )
-                if not offer_insert.data:
-                    raise RuntimeError("Nie udało się uzyskać ID nowo utworzonej oferty.")
+                    st.session_state.pop("last_generated_pdf", None)
+                    st.success(f"Oferta zapisana! (Numer w historii: {offer_number})")
+            except Exception as e:
+                st.error(f"❌ Wystąpił błąd podczas zapisywania wersji roboczej: {e}")
 
-                offer_id = offer_insert.data[0]["id"]
-
-                # 2. Przygotowanie pozycji do zapisu w offer_items oraz do wygenerowania PDF
-                items_db_payload = []
-                items_pdf_payload = []
-
-                for item in st.session_state.offer_items:
-                    prod = products_by_id[item["product_id"]]
-                    qty = int(item["quantity"])
-                    u_price = round(float(item["unit_price"]), 2)
-                    t_price = round(qty * u_price, 2)
-                    notes = (item.get("custom_notes") or "").strip()
-
-                    items_db_payload.append(
-                        {
-                            "offer_id": offer_id,
-                            "product_id": prod["id"],
-                            "quantity": qty,
-                            "unit_price": u_price,
-                            "total_price": t_price,
-                            "custom_notes": notes if notes else None,
-                        }
+    with save_col_pdf:
+        if st.button(
+            "💾 Zapisz ofertę w historii i wygeneruj PDF",
+            type="primary",
+            use_container_width=True,
+        ):
+            try:
+                with st.spinner("Zapisywanie oferty w bazie Supabase i generowanie pliku PDF..."):
+                    _, offer_number, items_pdf_payload = save_offer_to_database(
+                        supabase=supabase,
+                        current_client=current_client,
+                        offer_items_state=st.session_state.offer_items,
+                        products_by_id=products_by_id,
+                        total_net_value=total_net_value,
                     )
 
-                    items_pdf_payload.append(
-                        {
-                            "name": prod["name"],
-                            "description": prod.get("description") or "",
-                            "image_url": prod.get("image_url") or "",
-                            "quantity": qty,
-                            "unit_price": u_price,
-                            "total_price": t_price,
-                            "custom_notes": notes,
-                        }
+                    today_str = datetime.now().strftime("%d.%m.%Y")
+                    pdf_bytes = generate_pdf(
+                        client_data=current_client,
+                        items_data=items_pdf_payload,
+                        total_net=total_net_value,
+                        offer_number=offer_number,
+                        offer_date=today_str,
                     )
+                    safe_client_name = sanitize_filename(current_client["name"])
+                    safe_offer_no = offer_number.replace("/", "_")
+                    pdf_filename = f"Oferta_{safe_offer_no}_{safe_client_name}.pdf"
 
-                # Zapis pozycji w offer_items (z bezpiecznym fallbackiem dla custom_notes)
-                try:
-                    supabase.table("offer_items").insert(items_db_payload).execute()
-                except Exception as db_err:
-                    if "custom_notes" in str(db_err):
-                        fallback_payload = [
-                            {k: v for k, v in row.items() if k != "custom_notes"}
-                            for row in items_db_payload
-                        ]
-                        supabase.table("offer_items").insert(fallback_payload).execute()
-                    else:
-                        raise db_err
+                    st.session_state["last_generated_pdf"] = {
+                        "bytes": pdf_bytes,
+                        "filename": pdf_filename,
+                        "client_name": current_client["name"],
+                        "offer_number": offer_number,
+                    }
 
-                # 3. Generowanie PDF w pamięci (BytesIO)
-                pdf_bytes = generate_pdf(current_client, items_pdf_payload, total_net_value)
-                safe_client_name = sanitize_filename(current_client["name"])
-                pdf_filename = f"Oferta_{safe_client_name}.pdf"
-
-                st.session_state["last_generated_pdf"] = {
-                    "bytes": pdf_bytes,
-                    "filename": pdf_filename,
-                    "client_name": current_client["name"],
-                }
-
-                st.success("✅ Oferta została zapisana w historii, a plik PDF jest gotowy do pobrania poniżej!")
-        except Exception as e:
-            st.error(f"❌ Wystąpił błąd podczas zapisu oferty lub generowania PDF: {e}")
+                    st.success(
+                        f"✅ Oferta ({offer_number}) została zapisana w historii, a plik PDF jest gotowy do pobrania poniżej!"
+                    )
+            except Exception as e:
+                st.error(f"❌ Wystąpił błąd podczas zapisu oferty lub generowania PDF: {e}")
 
     # Wyświetlenie przycisku pobrania wygenerowanego PDF
     if "last_generated_pdf" in st.session_state:
@@ -779,19 +976,24 @@ def render_creator_tab(supabase: Client) -> None:
             data=pdf_info["bytes"],
             file_name=pdf_info["filename"],
             mime="application/pdf",
-            type="secondary",
+            type="primary",
             use_container_width=True,
         )
 
 
-# 8. Widok zakładki "📦 Baza Produktów" (tab2)
+# 9. Widok zakładki "📦 Baza Produktów" (tab2)
 def render_products_tab(supabase: Client) -> None:
-    """Renderuje interfejs zarządzania produktami (dodawanie, podgląd, edycja, usuwanie)."""
+    """Renderuje interfejs zarządzania produktami (dodawanie z kodem produktu, podgląd, edycja, usuwanie)."""
     st.header("📦 Baza Produktów")
 
     with st.expander("➕ Dodaj nowy produkt", expanded=False):
         with st.form("add_product_form", clear_on_submit=True):
-            prod_name = st.text_input("Nazwa produktu *", placeholder="np. Długopis metalowy z grawerem")
+            col_code, col_name = st.columns([1, 2])
+            with col_code:
+                prod_code = st.text_input("Kod produktu", placeholder="np. PRD-001")
+            with col_name:
+                prod_name = st.text_input("Nazwa produktu *", placeholder="np. Długopis metalowy z grawerem")
+
             prod_desc = st.text_area(
                 "Opis produktu *",
                 placeholder="Szczegółowy opis parametrów technicznych i zakresu dostawy...",
@@ -800,7 +1002,7 @@ def render_products_tab(supabase: Client) -> None:
                 "Zdjęcie produktu (opcjonalnie)",
                 type=["png", "jpg", "jpeg", "webp"],
             )
-            submit_product = st.form_submit_button("💾 Zapisz produkt")
+            submit_product = st.form_submit_button("💾 Zapisz produkt", type="primary")
 
             if submit_product:
                 if not prod_name.strip() or not prod_desc.strip():
@@ -813,6 +1015,7 @@ def render_products_tab(supabase: Client) -> None:
 
                         supabase.table("products").insert(
                             {
+                                "product_code": prod_code.strip() if prod_code and prod_code.strip() else None,
                                 "name": prod_name.strip(),
                                 "description": prod_desc.strip(),
                                 "image_url": image_url,
@@ -833,7 +1036,7 @@ def render_products_tab(supabase: Client) -> None:
     try:
         response = (
             supabase.table("products")
-            .select("id, name, description, image_url, created_at")
+            .select("id, product_code, name, description, image_url, created_at")
             .order("created_at", desc=True)
             .execute()
         )
@@ -849,10 +1052,13 @@ def render_products_tab(supabase: Client) -> None:
         return
 
     df_products = pd.DataFrame(products_data)
+    if "product_code" not in df_products.columns:
+        df_products["product_code"] = ""
+    df_products["product_code"] = df_products["product_code"].fillna("")
     df_products["created_at"] = pd.to_datetime(df_products["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
 
     st.dataframe(
-        df_products[["image_url", "name", "description", "created_at"]],
+        df_products[["image_url", "product_code", "name", "description", "created_at"]],
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -861,6 +1067,7 @@ def render_products_tab(supabase: Client) -> None:
                 help="Miniaturka zdjęcia produktu",
                 width="small",
             ),
+            "product_code": st.column_config.TextColumn("Kod produktu", width="small"),
             "name": st.column_config.TextColumn("Nazwa produktu", width="medium"),
             "description": st.column_config.TextColumn("Opis produktu", width="large"),
             "created_at": st.column_config.TextColumn("Data dodania", width="small"),
@@ -870,7 +1077,9 @@ def render_products_tab(supabase: Client) -> None:
     st.divider()
 
     st.subheader("🛠️ Edytuj lub usuń produkt")
-    product_options = {f"{p['name']} (ID: {p['id'][:8]}...)": p for p in products_data}
+    product_options = {
+        f"{format_product_label_with_code(p)} (ID: {p['id'][:8]}...)": p for p in products_data
+    }
     selected_label = st.selectbox(
         "Wybierz produkt z listy:",
         options=list(product_options.keys()),
@@ -883,14 +1092,22 @@ def render_products_tab(supabase: Client) -> None:
     with col_edit:
         with st.form("edit_product_form"):
             st.markdown("**Aktualizacja danych produktu**")
-            new_name = st.text_input("Nazwa produktu *", value=selected_product["name"])
+            e_col_code, e_col_name = st.columns([1, 2])
+            with e_col_code:
+                new_code = st.text_input(
+                    "Kod produktu",
+                    value=selected_product.get("product_code") or "",
+                )
+            with e_col_name:
+                new_name = st.text_input("Nazwa produktu *", value=selected_product["name"])
+
             new_desc = st.text_area("Opis produktu *", value=selected_product["description"] or "")
             new_image = st.file_uploader(
                 "Nowe zdjęcie produktu (pozostaw puste, aby zachować obecne)",
                 type=["png", "jpg", "jpeg", "webp"],
                 key=f"edit_img_{selected_product['id']}",
             )
-            update_btn = st.form_submit_button("✏️ Zaktualizuj produkt")
+            update_btn = st.form_submit_button("✏️ Zaktualizuj produkt", type="primary")
 
             if update_btn:
                 if not new_name.strip() or not new_desc.strip():
@@ -898,6 +1115,7 @@ def render_products_tab(supabase: Client) -> None:
                 else:
                     try:
                         update_payload = {
+                            "product_code": new_code.strip() if new_code and new_code.strip() else None,
                             "name": new_name.strip(),
                             "description": new_desc.strip(),
                         }
@@ -933,7 +1151,7 @@ def render_products_tab(supabase: Client) -> None:
                     st.error(f"❌ Błąd podczas usuwania produktu: {e}")
 
 
-# 9. Widok zakładki "🏢 Baza Klientów" (tab3)
+# 10. Widok zakładki "🏢 Baza Klientów" (tab3)
 def render_clients_tab(supabase: Client) -> None:
     """Renderuje interfejs zarządzania klientami (dodawanie, podgląd, edycja, usuwanie)."""
     st.header("🏢 Baza Klientów")
@@ -946,7 +1164,7 @@ def render_clients_tab(supabase: Client) -> None:
                 "Adres",
                 placeholder="np. ul. Jesionowa 12, 55-032 Przykładowo",
             )
-            submit_client = st.form_submit_button("💾 Zapisz klienta")
+            submit_client = st.form_submit_button("💾 Zapisz klienta", type="primary")
 
             if submit_client:
                 if not client_name.strip():
@@ -1023,7 +1241,7 @@ def render_clients_tab(supabase: Client) -> None:
             edit_name = st.text_input("Nazwa firmy *", value=selected_client["name"])
             edit_nip = st.text_input("NIP", value=selected_client.get("nip") or "")
             edit_address = st.text_input("Adres", value=selected_client.get("address") or "")
-            update_client_btn = st.form_submit_button("✏️ Zaktualizuj dane klienta")
+            update_client_btn = st.form_submit_button("✏️ Zaktualizuj dane klienta", type="primary")
 
             if update_client_btn:
                 if not edit_name.strip():
@@ -1067,11 +1285,11 @@ def render_clients_tab(supabase: Client) -> None:
                     st.error(f"❌ Błąd podczas usuwania klienta: {e}")
 
 
-# 10. Widok zakładki "🕰️ Historia Ofert" (tab4)
+# 11. Widok zakładki "🕰️ Historia Ofert" (tab4)
 def render_history_tab(supabase: Client) -> None:
     """
     Renderuje historię zapisanych ofert z możliwością podglądu pozycji,
-    wczytania oferty do kreatora, pobrania PDF oraz usunięcia oferty z bazy.
+    powielenia oferty do kreatora, pobrania PDF oraz usunięcia oferty z bazy.
     """
     st.header("🕰️ Historia Ofert")
 
@@ -1095,30 +1313,35 @@ def render_history_tab(supabase: Client) -> None:
 
     for offer in offers_data:
         offer_id = offer["id"]
-        created_str = pd.to_datetime(offer["created_at"]).strftime("%Y-%m-%d %H:%M")
+        created_dt = pd.to_datetime(offer["created_at"])
+        created_str = created_dt.strftime("%Y-%m-%d %H:%M")
+        offer_date_pdf = created_dt.strftime("%d.%m.%Y")
+        offer_number = offer.get("offer_number") or f"OFE/{created_dt.strftime('%Y/%m')}/{offer_id[:4].upper()}"
         client_info = offer.get("clients") or {}
         client_name = client_info.get("name", "Nieznany klient")
         total_net = float(offer.get("total_net_value") or 0.0)
         offer_items_raw = offer.get("offer_items") or []
 
         expander_title = (
-            f"📅 {created_str}  |  🏢 {client_name}  |  💰 RAZEM NETTO: {format_pl_currency(total_net)} zł"
+            f"📄 {offer_number}  |  📅 {created_str}  |  🏢 {client_name}  |  💰 RAZEM NETTO: {format_pl_currency(total_net)} zł"
         )
 
         with st.expander(expander_title, expanded=False):
             st.markdown(
+                f"**Numer oferty:** `{offer_number}` | "
                 f"**Klient:** {client_name} | "
                 f"**NIP:** {client_info.get('nip') or '—'} | "
                 f"**Adres:** {client_info.get('address') or '—'}"
             )
 
-            # Przygotowanie listy pozycji do wyświetlenia i do PDF (z polem image_url z products)
+            # Przygotowanie listy pozycji do wyświetlenia w podglądzie oraz do PDF (bez kodu produktu w PDF)
             preview_rows = []
             pdf_items = []
 
             for idx, oi in enumerate(offer_items_raw, start=1):
                 prod = oi.get("products") or {}
                 qty = int(round(float(oi.get("quantity") or 1)))
+                unit = oi.get("unit") if oi.get("unit") in UNIT_OPTIONS else "szt"
                 u_price = float(oi.get("unit_price") or 0.0)
                 t_price = float(oi.get("total_price") or (qty * u_price))
                 notes = oi.get("custom_notes") or ""
@@ -1126,20 +1349,23 @@ def render_history_tab(supabase: Client) -> None:
                 preview_rows.append(
                     {
                         "Lp.": idx,
+                        "Kod produktu": prod.get("product_code") or "—",
                         "Produkt": prod.get("name", "Usunięty produkt"),
                         "Dodatkowy opis": notes,
-                        "Ilość": f"{qty} szt",
+                        "Ilość": f"{qty} {unit}",
                         "Cena netto": f"{format_pl_currency(u_price)} zł",
                         "Wartość netto": f"{format_pl_currency(t_price)} zł",
                     }
                 )
 
+                # Na PDF przekazujemy wyłącznie czystą nazwę produktu (bez product_code)
                 pdf_items.append(
                     {
                         "name": prod.get("name", "Produkt"),
                         "description": prod.get("description") or "",
                         "image_url": prod.get("image_url") or "",
                         "quantity": qty,
+                        "unit": unit,
                         "unit_price": u_price,
                         "total_price": t_price,
                         "custom_notes": notes,
@@ -1154,21 +1380,23 @@ def render_history_tab(supabase: Client) -> None:
             # Trzy przyciski akcji dla historycznej oferty
             act_col1, act_col2, act_col3 = st.columns(3)
 
-            # 1. Wczytaj do kreatora
+            # 1. Powiel ofertę (wczytuje klienta, pozycje oraz jednostki miary do kreatora)
             with act_col1:
                 if st.button(
-                    "🔄 Wczytaj do kreatora",
+                    "🔄 Powiel ofertę",
                     key=f"load_offer_{offer_id}",
                     use_container_width=True,
                 ):
                     st.session_state.selected_client_id = offer.get("client_id")
                     loaded_items = []
                     for oi in offer_items_raw:
+                        unit_val = oi.get("unit") if oi.get("unit") in UNIT_OPTIONS else "szt"
                         loaded_items.append(
                             {
                                 "row_id": str(uuid.uuid4()),
                                 "product_id": oi.get("product_id"),
                                 "quantity": int(round(float(oi.get("quantity") or 1))),
+                                "unit": unit_val,
                                 "unit_price": float(oi.get("unit_price") or 0.0),
                                 "custom_notes": oi.get("custom_notes") or "",
                             }
@@ -1177,18 +1405,25 @@ def render_history_tab(supabase: Client) -> None:
                         loaded_items if loaded_items else [create_empty_offer_item()]
                     )
                     st.success(
-                        "✅ Oferta wczytana! Przejdź do zakładki Kreator Oferty, aby ją zmodyfikować."
+                        "✅ Oferta została powielona do kreatora! Przejdź do zakładki '📄 Kreator Oferty', aby ją zmodyfikować."
                     )
 
             # 2. Pobierz PDF
             with act_col2:
                 try:
-                    pdf_bytes = generate_pdf(client_info, pdf_items, total_net)
+                    pdf_bytes = generate_pdf(
+                        client_data=client_info,
+                        items_data=pdf_items,
+                        total_net=total_net,
+                        offer_number=offer_number,
+                        offer_date=offer_date_pdf,
+                    )
                     safe_name = sanitize_filename(client_name)
+                    safe_offer_no = offer_number.replace("/", "_")
                     st.download_button(
                         label="📄 Pobierz PDF",
                         data=pdf_bytes,
-                        file_name=f"Oferta_{safe_name}_{created_str[:10]}.pdf",
+                        file_name=f"Oferta_{safe_offer_no}_{safe_name}.pdf",
                         mime="application/pdf",
                         key=f"dl_pdf_{offer_id}",
                         use_container_width=True,
@@ -1212,8 +1447,11 @@ def render_history_tab(supabase: Client) -> None:
                         st.error(f"❌ Błąd podczas usuwania oferty: {e}")
 
 
-# 11. Główna funkcja aplikacji
+# 12. Główna funkcja aplikacji
 def main() -> None:
+    # Wstrzyknięcie firmowej kolorystyki (#54B6A6)
+    apply_custom_theme()
+
     # Blokada aplikacji przed nieautoryzowanym dostępem
     if not check_authentication():
         st.stop()
