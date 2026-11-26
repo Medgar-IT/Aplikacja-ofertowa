@@ -21,8 +21,9 @@ from xhtml2pdf import pisa
 STORAGE_BUCKET = "product-images"
 LOGO_URL = "https://jjkcdlsniwytkyregzrf.supabase.co/storage/v1/object/public/product-images/obraz_2026-11-06_182711852.png"
 BRAND_COLOR = "#54B6A6"
-UNIT_OPTIONS = ["szt", "kg", "m"]
+UNIT_OPTIONS = ["szt", "kg", "mb", "kpl"]
 DOC_TYPE_OPTIONS = ["Oferta", "Zamówienie"]
+PAYMENT_TERMS_OPTIONS = ["7 dni", "14 dni", "21 dni", "30 dni", "Przedpłata"]
 VAT_RATE = 0.23
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -133,7 +134,7 @@ def check_authentication() -> bool:
     return False
 
 
-# 4. Inicjalizacja stanu sesji dla Kreatora Oferty / Zamówienia oraz funkcje pomocnicze
+# 4. Inicjalizacja stanu sesji dla Kreatora Dokumentu oraz funkcje pomocnicze
 def create_empty_offer_item(default_product_id: Optional[str] = None) -> Dict[str, Any]:
     """Tworzy nowy, domyślny wiersz pozycji w kreatorze dokumentu."""
     return {
@@ -156,6 +157,9 @@ def init_creator_state() -> None:
 
     if "realization_date" not in st.session_state:
         st.session_state.realization_date = date.today()
+
+    if "payment_terms" not in st.session_state:
+        st.session_state.payment_terms = "7 dni"
 
     if "delivery_address" not in st.session_state:
         st.session_state.delivery_address = ""
@@ -314,6 +318,7 @@ def generate_pdf(
     document_type: str = "Oferta",
     delivery_address: Optional[str] = None,
     realization_date: Optional[Any] = None,
+    payment_terms: Optional[str] = None,
 ) -> bytes:
     """
     Generuje nowoczesny dokument PDF (Oferta lub Zamówienie) z użyciem czcionek Montserrat i Open Sans.
@@ -329,6 +334,7 @@ def generate_pdf(
     final_offer_date = offer_date or datetime.now().strftime("%d.%m.%Y")
     final_realization_date = format_date_pl(realization_date)
     final_delivery_address = (delivery_address or "").strip()
+    final_payment_terms = (payment_terms or "7 dni").strip()
 
     vat_amount = round(total_net * VAT_RATE, 2)
     total_gross = round(total_net + vat_amount, 2)
@@ -418,7 +424,7 @@ def generate_pdf(
             table.parties-table {
                 width: 100%;
                 border-collapse: collapse;
-                margin-bottom: 14px;
+                margin-bottom: 16px;
             }
             table.parties-table td {
                 width: 50%;
@@ -446,24 +452,6 @@ def generate_pdf(
             }
             .party-line {
                 margin: 2px 0;
-                color: #333333;
-            }
-            table.order-details-box {
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 16px;
-            }
-            table.order-details-box td {
-                background-color: #F9F9F9;
-                border: 1px solid #E6E6E6;
-                border-left: 3px solid #54B6A6;
-                padding: 8px 12px;
-                font-size: 9.5pt;
-                color: #333333;
-            }
-            .order-label {
-                font-family: 'Montserrat', sans-serif;
-                font-weight: bold;
                 color: #333333;
             }
             table.offer-table {
@@ -540,6 +528,32 @@ def generate_pdf(
                 background-color: #F9F9F9;
                 border-top: 2px solid #54B6A6;
             }
+            table.order-details-box {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 14px;
+            }
+            table.order-details-box td {
+                background-color: #F9F9F9;
+                border: 1px solid #E6E6E6;
+                border-left: 3px solid #54B6A6;
+                padding: 9px 12px;
+                font-size: 9.5pt;
+                color: #333333;
+            }
+            .order-details-heading {
+                font-family: 'Montserrat', sans-serif;
+                font-size: 9.5pt;
+                font-weight: bold;
+                color: #54B6A6;
+                margin-bottom: 4px;
+                letter-spacing: 0.4px;
+            }
+            .order-label {
+                font-family: 'Montserrat', sans-serif;
+                font-weight: bold;
+                color: #333333;
+            }
             table.order-summary-wrapper {
                 width: 100%;
                 border-collapse: collapse;
@@ -597,10 +611,10 @@ def generate_pdf(
             <tr>
                 <td>
                     <div class="party-heading">SPRZEDAWCA</div>
-                    <div class="party-name">Proles Concept</div>
-                    <div class="party-line">Magdalena Domagalska</div>
+                    <div class="party-name">Proles Concept Robert Czajczyk</div>
                     <div class="party-line">ul. Kolejowa 3, 32-086 Dziekanowice</div>
-                    <div class="party-line">NIP: 944 106 45 83</div>
+                    <div class="party-line">ING Bank Śląski</div>
+                    <div class="party-line">Numer konta: PL28 1050 1445 1000 0090 9422 5811</div>
                 </td>
                 <td>
                     <div class="party-heading">KLIENT</div>
@@ -614,24 +628,6 @@ def generate_pdf(
                 </td>
             </tr>
         </table>
-
-        <!-- Dodatkowa sekcja dla ZAMÓWIENIA: Adres dostawy oraz Data realizacji na jasnoszarym tle -->
-        {% if is_order %}
-        <table class="order-details-box">
-            <tr>
-                <td>
-                    <div>
-                        <span class="order-label">Adres dostawy:</span>
-                        {{ delivery_address if delivery_address else (client.address if client.address else '—') }}
-                    </div>
-                    <div style="margin-top: 4px;">
-                        <span class="order-label">Data realizacji:</span>
-                        {{ realization_date if realization_date else '—' }}
-                    </div>
-                </td>
-            </tr>
-        </table>
-        {% endif %}
 
         <!-- Tabela z pozycjami (bez kodu produktu) -->
         <table class="offer-table">
@@ -663,7 +659,7 @@ def generate_pdf(
                         {% endif %}
                     </td>
 
-                    <!-- Kolumna 3 (12%): Ilość z wybraną jednostką miary (szt / kg / m) -->
+                    <!-- Kolumna 3 (12%): Ilość z wybraną jednostką miary (szt / kg / mb / kpl) -->
                     <td class="col-qty">
                         {{ item.quantity_str }} {{ item.unit }}
                     </td>
@@ -692,7 +688,28 @@ def generate_pdf(
         </table>
 
         {% if is_order %}
-        <!-- Nowoczesny blok podsumowania wyrównany do prawej dla ZAMÓWIENIA -->
+        <!-- Sekcja pod tabelą dla ZAMÓWIENIA: Szczegóły realizacji (Adres dostawy, Data realizacji, Termin płatności) -->
+        <table class="order-details-box">
+            <tr>
+                <td>
+                    <div class="order-details-heading">SZCZEGÓŁY REALIZACJI</div>
+                    <div>
+                        <span class="order-label">Adres dostawy:</span>
+                        {{ delivery_address if delivery_address else (client.address if client.address else '—') }}
+                    </div>
+                    <div style="margin-top: 3px;">
+                        <span class="order-label">Data realizacji:</span>
+                        {{ realization_date if realization_date else '—' }}
+                    </div>
+                    <div style="margin-top: 3px;">
+                        <span class="order-label">Termin płatności:</span>
+                        {{ payment_terms }}
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Nowoczesny blok podsumowania kosztów wyrównany do prawej dla ZAMÓWIENIA -->
         <table class="order-summary-wrapper">
             <tr>
                 <td style="width: 52%; border: none;"></td>
@@ -754,6 +771,7 @@ def generate_pdf(
         offer_date=final_offer_date,
         delivery_address=final_delivery_address,
         realization_date=final_realization_date,
+        payment_terms=final_payment_terms,
         client={
             "name": client_data.get("name", ""),
             "nip": client_data.get("nip") or "",
@@ -838,10 +856,11 @@ def save_offer_to_database(
     document_type: str = "Oferta",
     delivery_address: Optional[str] = None,
     realization_date: Optional[date] = None,
+    payment_terms: Optional[str] = None,
 ) -> Tuple[str, str, List[Dict[str, Any]]]:
     """
     Zapisuje dokument (Ofertę lub Zamówienie) w tabeli `offers` (wraz z `document_type`,
-    `delivery_address`, `realization_date` oraz `offer_number`) i pozycje w `offer_items`.
+    `delivery_address`, `realization_date`, `payment_terms` oraz `offer_number`) i pozycje w `offer_items`.
     Zwraca krotkę: (offer_id, offer_number, items_pdf_payload).
     """
     offer_number = generate_offer_number(document_type)
@@ -854,6 +873,7 @@ def save_offer_to_database(
         "document_type": document_type,
         "delivery_address": (delivery_address or "").strip() if is_order else None,
         "realization_date": realization_date.isoformat() if (is_order and realization_date) else None,
+        "payment_terms": payment_terms if is_order else None,
     }
 
     offer_insert = supabase.table("offers").insert(offer_payload).execute()
@@ -914,10 +934,10 @@ def save_offer_to_database(
     return offer_id, offer_number, items_pdf_payload
 
 
-# 8. Widok zakładki "📄 Kreator Oferty" (tab1)
+# 8. Widok zakładki "📄 Kreator Dokumentu" (tab1)
 def render_creator_tab(supabase: Client) -> None:
-    """Renderuje kreator Oferty / Zamówienia z dynamiczną listą pozycji, VAT/Brutto i eksportem do PDF."""
-    st.header("📄 Kreator Dokumentu (Oferta / Zamówienie)")
+    """Renderuje kreator Oferty / Zamówienia z dynamiczną listą pozycji, terminem płatności, VAT/Brutto i eksportem do PDF."""
+    st.header("📄 Kreator Dokumentu")
     init_creator_state()
 
     try:
@@ -978,10 +998,10 @@ def render_creator_tab(supabase: Client) -> None:
     with col_seller:
         with st.container(border=True):
             st.markdown("##### **SPRZEDAWCA**")
-            st.markdown("**Proles Concept**")
-            st.markdown("Magdalena Domagalska")
+            st.markdown("**Proles Concept Robert Czajczyk**")
             st.markdown("ul. Kolejowa 3, 32-086 Dziekanowice")
-            st.markdown("NIP: 944 106 45 83")
+            st.markdown("ING Bank Śląski")
+            st.markdown("Numer konta: `PL28 1050 1445 1000 0090 9422 5811`")
 
     with col_buyer:
         with st.container(border=True):
@@ -1000,12 +1020,23 @@ def render_creator_tab(supabase: Client) -> None:
                 value=st.session_state.realization_date or date.today(),
             )
             st.session_state.realization_date = realization_date_val
+
+            if st.session_state.payment_terms not in PAYMENT_TERMS_OPTIONS:
+                st.session_state.payment_terms = "7 dni"
+            pay_idx = PAYMENT_TERMS_OPTIONS.index(st.session_state.payment_terms)
+            payment_terms_val = st.selectbox(
+                "Termin płatności",
+                options=PAYMENT_TERMS_OPTIONS,
+                index=pay_idx,
+            )
+            st.session_state.payment_terms = payment_terms_val
+
         with ord_col2:
             delivery_address_val = st.text_area(
                 "Adres dostawy",
                 value=st.session_state.delivery_address,
                 placeholder=current_client.get("address") or "Wpisz adres dostawy zamówienia...",
-                height=100,
+                height=132,
             )
             st.session_state.delivery_address = delivery_address_val
 
@@ -1128,6 +1159,7 @@ def render_creator_tab(supabase: Client) -> None:
             st.session_state.offer_items = [create_empty_offer_item(product_ids[0])]
             st.session_state.delivery_address = ""
             st.session_state.realization_date = date.today()
+            st.session_state.payment_terms = "7 dni"
             st.session_state.pop("last_generated_pdf", None)
             st.rerun()
 
@@ -1176,12 +1208,23 @@ def render_creator_tab(supabase: Client) -> None:
 
     st.write("")
 
-    # Dwa przyciski zapisu: Wersja robocza oraz Zapis + Generowanie PDF
+    # Dynamiczne etykiety przycisków zależne od wybranego typu dokumentu
+    draft_btn_label = (
+        "💾 Zapisz zamówienie jako wersję roboczą"
+        if is_order
+        else "💾 Zapisz ofertę jako wersję roboczą"
+    )
+    pdf_btn_label = (
+        "📄 Generuj zamówienie (PDF)"
+        if is_order
+        else "📄 Generuj ofertę (PDF)"
+    )
+
     save_col_draft, save_col_pdf = st.columns(2)
 
     with save_col_draft:
         if st.button(
-            "💾 Zapisz ofertę jako wersję roboczą",
+            draft_btn_label,
             use_container_width=True,
         ):
             try:
@@ -1195,15 +1238,16 @@ def render_creator_tab(supabase: Client) -> None:
                         document_type=chosen_doc_type,
                         delivery_address=st.session_state.delivery_address if is_order else None,
                         realization_date=st.session_state.realization_date if is_order else None,
+                        payment_terms=st.session_state.payment_terms if is_order else None,
                     )
                     st.session_state.pop("last_generated_pdf", None)
-                    st.success(f"Oferta zapisana! ({chosen_doc_type} nr {offer_number})")
+                    st.success(f"{chosen_doc_type} zapisano jako wersję roboczą! (Numer: {offer_number})")
             except Exception as e:
                 st.error(f"❌ Wystąpił błąd podczas zapisywania wersji roboczej: {e}")
 
     with save_col_pdf:
         if st.button(
-            "💾 Zapisz ofertę w historii i wygeneruj PDF",
+            pdf_btn_label,
             type="primary",
             use_container_width=True,
         ):
@@ -1218,6 +1262,7 @@ def render_creator_tab(supabase: Client) -> None:
                         document_type=chosen_doc_type,
                         delivery_address=st.session_state.delivery_address if is_order else None,
                         realization_date=st.session_state.realization_date if is_order else None,
+                        payment_terms=st.session_state.payment_terms if is_order else None,
                     )
 
                     today_str = datetime.now().strftime("%d.%m.%Y")
@@ -1230,6 +1275,7 @@ def render_creator_tab(supabase: Client) -> None:
                         document_type=chosen_doc_type,
                         delivery_address=st.session_state.delivery_address if is_order else None,
                         realization_date=st.session_state.realization_date if is_order else None,
+                        payment_terms=st.session_state.payment_terms if is_order else None,
                     )
                     safe_client_name = sanitize_filename(current_client["name"])
                     safe_offer_no = offer_number.replace("/", "_")
@@ -1565,40 +1611,51 @@ def render_clients_tab(supabase: Client) -> None:
                     st.error(f"❌ Błąd podczas usuwania klienta: {e}")
 
 
-# 11. Widok zakładki "🕰️ Historia Ofert" (tab4)
-def render_history_tab(supabase: Client) -> None:
+# 11. Widok zakładek "🕰️ Historia Ofert" (tab4) oraz "📦 Historia Zamówień" (tab5)
+def render_documents_history_tab(supabase: Client, target_doc_type: str) -> None:
     """
-    Renderuje historię zapisanych Ofert i Zamówień z możliwością podglądu pozycji,
-    powielenia dokumentu do kreatora, pobrania PDF oraz usunięcia z bazy.
+    Renderuje historię zapisanych dokumentów wybranego typu ('Oferta' lub 'Zamówienie')
+    z możliwością podglądu pozycji, powielenia do kreatora, pobrania PDF oraz usunięcia z bazy.
     """
-    st.header("🕰️ Historia Ofert i Zamówień")
+    is_order_tab = target_doc_type == "Zamówienie"
+    key_prefix = "order" if is_order_tab else "offer"
+
+    if is_order_tab:
+        st.header("📦 Historia Zamówień")
+    else:
+        st.header("🕰️ Historia Ofert")
 
     try:
         response = (
             supabase.table("offers")
             .select("*, clients(*), offer_items(*, products(*))")
+            .eq("document_type", target_doc_type)
             .order("created_at", desc=True)
             .execute()
         )
         offers_data = response.data or []
     except Exception as e:
-        st.error(f"❌ Nie udało się pobrać historii z bazy danych: {e}")
+        st.error(f"❌ Nie udało się pobrać historii ({target_doc_type}) z bazy danych: {e}")
         return
 
     if not offers_data:
-        st.info("Brak zapisanych dokumentów w historii. Utwórz pierwszą ofertę lub zamówienie w zakładce '📄 Kreator Oferty'.")
+        empty_msg = (
+            "Brak zapisanych zamówień w historii. Utwórz pierwsze zamówienie w zakładce '📄 Kreator Dokumentu'."
+            if is_order_tab
+            else "Brak zapisanych ofert w historii. Utwórz pierwszą ofertę w zakładce '📄 Kreator Dokumentu'."
+        )
+        st.info(empty_msg)
         return
 
-    st.caption(f"Łączna liczba zapisanych dokumentów: **{len(offers_data)}**")
+    count_label = "zamówień" if is_order_tab else "ofert"
+    st.caption(f"Łączna liczba zapisanych {count_label}: **{len(offers_data)}**")
 
     for offer in offers_data:
         offer_id = offer["id"]
-        doc_type = offer.get("document_type") if offer.get("document_type") in DOC_TYPE_OPTIONS else "Oferta"
-        is_order = doc_type == "Zamówienie"
         created_dt = pd.to_datetime(offer["created_at"])
         created_str = created_dt.strftime("%Y-%m-%d %H:%M")
         offer_date_pdf = created_dt.strftime("%d.%m.%Y")
-        default_prefix = "ZAM" if is_order else "OFE"
+        default_prefix = "ZAM" if is_order_tab else "OFE"
         offer_number = offer.get("offer_number") or f"{default_prefix}/{created_dt.strftime('%Y/%m')}/{offer_id[:4].upper()}"
         client_info = offer.get("clients") or {}
         client_name = client_info.get("name", "Nieznany klient")
@@ -1606,12 +1663,13 @@ def render_history_tab(supabase: Client) -> None:
         total_gross = round(total_net * (1 + VAT_RATE), 2)
         delivery_address = offer.get("delivery_address") or ""
         realization_date = offer.get("realization_date")
+        payment_terms = offer.get("payment_terms") or "7 dni"
         offer_items_raw = offer.get("offer_items") or []
 
-        badge_icon = "📦 ZAMÓWIENIE" if is_order else "📄 OFERTA"
+        badge_icon = "📦 ZAMÓWIENIE" if is_order_tab else "📄 OFERTA"
         amount_summary = (
             f"NETTO: {format_pl_currency(total_net)} zł (BRUTTO: {format_pl_currency(total_gross)} zł)"
-            if is_order
+            if is_order_tab
             else f"NETTO: {format_pl_currency(total_net)} zł"
         )
         expander_title = (
@@ -1620,15 +1678,16 @@ def render_history_tab(supabase: Client) -> None:
 
         with st.expander(expander_title, expanded=False):
             st.markdown(
-                f"**Typ dokumentu:** `{doc_type}` | "
+                f"**Typ dokumentu:** `{target_doc_type}` | "
                 f"**Numer:** `{offer_number}` | "
                 f"**KLIENT:** {client_name} | "
                 f"**NIP:** {client_info.get('nip') or '—'} | "
                 f"**Adres:** {client_info.get('address') or '—'}"
             )
-            if is_order:
+            if is_order_tab:
                 st.markdown(
                     f"**Data realizacji:** `{format_date_pl(realization_date) or '—'}` | "
+                    f"**Termin płatności:** `{payment_terms}` | "
                     f"**Adres dostawy:** {delivery_address or client_info.get('address') or '—'}"
                 )
 
@@ -1675,16 +1734,20 @@ def render_history_tab(supabase: Client) -> None:
 
             act_col1, act_col2, act_col3 = st.columns(3)
 
-            # 1. Powiel ofertę (wczytuje typ dokumentu, klienta, dane dostawy, pozycje oraz jednostki miary)
+            # 1. Powiel ofertę / zamówienie (wczytuje wszystkie pola, w tym payment_terms i jednostki miary)
+            duplicate_btn_label = "🔄 Powiel zamówienie" if is_order_tab else "🔄 Powiel ofertę"
             with act_col1:
                 if st.button(
-                    "🔄 Powiel ofertę",
-                    key=f"load_offer_{offer_id}",
+                    duplicate_btn_label,
+                    key=f"load_{key_prefix}_{offer_id}",
                     use_container_width=True,
                 ):
-                    st.session_state.document_type = doc_type
+                    st.session_state.document_type = target_doc_type
                     st.session_state.selected_client_id = offer.get("client_id")
                     st.session_state.delivery_address = delivery_address
+                    st.session_state.payment_terms = (
+                        payment_terms if payment_terms in PAYMENT_TERMS_OPTIONS else "7 dni"
+                    )
                     if realization_date:
                         try:
                             st.session_state.realization_date = pd.to_datetime(realization_date).date()
@@ -1710,7 +1773,7 @@ def render_history_tab(supabase: Client) -> None:
                         loaded_items if loaded_items else [create_empty_offer_item()]
                     )
                     st.success(
-                        "✅ Dokument został powielony do kreatora! Przejdź do zakładki '📄 Kreator Oferty', aby go zmodyfikować."
+                        f"✅ {target_doc_type} powielono do kreatora! Przejdź do zakładki '📄 Kreator Dokumentu', aby wprowadzić zmiany."
                     )
 
             # 2. Pobierz PDF
@@ -1722,19 +1785,20 @@ def render_history_tab(supabase: Client) -> None:
                         total_net=total_net,
                         offer_number=offer_number,
                         offer_date=offer_date_pdf,
-                        document_type=doc_type,
+                        document_type=target_doc_type,
                         delivery_address=delivery_address,
                         realization_date=realization_date,
+                        payment_terms=payment_terms,
                     )
                     safe_name = sanitize_filename(client_name)
                     safe_offer_no = offer_number.replace("/", "_")
-                    file_prefix = "Zamowienie" if is_order else "Oferta"
+                    file_prefix = "Zamowienie" if is_order_tab else "Oferta"
                     st.download_button(
                         label="📄 Pobierz PDF",
                         data=pdf_bytes,
                         file_name=f"{file_prefix}_{safe_offer_no}_{safe_name}.pdf",
                         mime="application/pdf",
-                        key=f"dl_pdf_{offer_id}",
+                        key=f"dl_pdf_{key_prefix}_{offer_id}",
                         use_container_width=True,
                     )
                 except Exception as e:
@@ -1744,13 +1808,13 @@ def render_history_tab(supabase: Client) -> None:
             with act_col3:
                 if st.button(
                     "🗑️ Usuń z historii",
-                    key=f"del_offer_{offer_id}",
+                    key=f"del_{key_prefix}_{offer_id}",
                     type="primary",
                     use_container_width=True,
                 ):
                     try:
                         supabase.table("offers").delete().eq("id", offer_id).execute()
-                        set_flash_message("success", "🗑️ Dokument został usunięty z historii.")
+                        set_flash_message("success", f"🗑️ {target_doc_type} usunięto z historii.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Błąd podczas usuwania dokumentu: {e}")
@@ -1775,12 +1839,13 @@ def main() -> None:
     # Wyświetlenie ewentualnych powiadomień po przeładowaniu (st.rerun)
     show_flash_message()
 
-    # Główna nawigacja oparta na zakładkach
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📄 Kreator Oferty",
+    # Główna nawigacja oparta na 5 zakładkach
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📄 Kreator Dokumentu",
         "📦 Baza Produktów",
         "🏢 Baza Klientów",
         "🕰️ Historia Ofert",
+        "📦 Historia Zamówień",
     ])
 
     with tab1:
@@ -1793,7 +1858,10 @@ def main() -> None:
         render_clients_tab(supabase)
 
     with tab4:
-        render_history_tab(supabase)
+        render_documents_history_tab(supabase, target_doc_type="Oferta")
+
+    with tab5:
+        render_documents_history_tab(supabase, target_doc_type="Zamówienie")
 
 
 if __name__ == "__main__":
